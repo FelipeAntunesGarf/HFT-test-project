@@ -1,0 +1,206 @@
+using System;
+using System.Net;
+using System.IO;
+using Newtonsoft.Json;
+using OxyPlot;
+using OxyPlot.Series;
+using OxyPlot.Axes;
+
+namespace ForexOneLegTrading
+{
+    public partial class MainForm : Form
+    {
+        private const string YahooFinanceApiUrl = "https://query1.finance.yahoo.com/v8/finance/chart/";
+        
+        private string _symbol;
+        private double _positionSize;
+        private double _stopLoss;
+        private double _takeProfit;
+
+        private PlotModel _plotModel;
+        private LineSeries _priceSeries;
+        private CandleStickSeries _candleSeries;
+
+        public MainForm()
+        {
+            InitializeComponent();
+            InitializePlot();
+        }
+
+        private void InitializePlot()
+        {
+            // Cria o modelo do gráfico
+            _plotModel = new PlotModel
+            {
+                Title = "Preço do Ativo",
+                PlotType = PlotType.Cartesian,
+                Background = OxyColors.White
+            };
+
+            // Adiciona o eixo X com a data
+            var dateTimeAxis = new DateTimeAxis
+            {
+                Position = AxisPosition.Bottom,
+                IntervalType = DateTimeIntervalType.Hours,
+                StringFormat = "dd/MM/yyyy HH:mm"
+            };
+            _plotModel.Axes.Add(dateTimeAxis);
+
+            // Adiciona o eixo Y com o preço
+            var linearAxis = new LinearAxis
+            {
+                Position = AxisPosition.Left,
+                Title = "Preço"
+            };
+            _plotModel.Axes.Add(linearAxis);
+
+            // Cria a série de preços
+            _priceSeries = new LineSeries
+            {
+                Title = "Preço",
+                Color = OxyColors.Blue
+            };
+            _plotModel.Series.Add(_priceSeries);
+
+            // Cria a série de velas
+            _candleSeries = new CandleStickSeries
+            {
+                Title = "Velas",
+                IncreasingColor = OxyColors.Green,
+                DecreasingColor = OxyColors.Red
+            };
+            _plotModel.Series.Add(_candleSeries);
+
+            // Adiciona o modelo do gráfico à PlotView
+            plotView.Model = _plotModel;
+        }
+
+        private void btnStart_Click(object sender, EventArgs e)
+        {
+            _symbol = txtSymbol.Text;
+            _positionSize = double.Parse(txtPositionSize.Text);
+            _stopLoss = double.Parse(txtStopLoss.Text);
+            _takeProfit = double.Parse(txtTakeProfit.Text);
+
+            // Loop de negociação
+            while (true)
+            {
+                try
+                {
+                    var quote = GetLatestQuote(_symbol);
+
+                    // Checa se houve mudança no preço do ativo
+                    if (quote.Timestamp != quote.PreviousCloseTimestamp)
+                    {
+                        // Adiciona o preço atual à série de preços
+                        _priceSeries.Points.Add(new DataPoint(DateTimeAxis.ToDouble(quote.Timestamp), quote.Close));
+
+                        // Adiciona a vela atual à série de velas
+                        var candle = new HighLowItem(quote.High, quote.Low, quote.Open, quote.Close);
+                        _candleSeries.Items.Add(candle);
+
+                        // Atualiza o gráfico
+                        plotView.InvalidatePlot();
+                    }
+
+                    // Realiza as operações de compra e venda se necessário
+                    // ...
+
+                    // Aguarda 5 segundos antes de fazer uma nova requisição
+                    System.Threading.Thread.Sleep(5000);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Erro: " + ex.Message);
+                }
+            }
+        }
+
+        private void UpdateChart(Quote quote)
+{
+    // Adiciona o preço atual à série de preços
+    _priceSeries.Points.Add(new DataPoint(DateTimeAxis.ToDouble(quote.Time), quote.Price));
+
+    // Adiciona a vela atual à série de velas
+    var candleItem = new HighLowItem(quote.High, quote.Low, quote.Open, quote.Close);
+    _candleSeries.Items.Add(candleItem);
+
+    // Remove pontos antigos para evitar que o gráfico fique muito grande
+    if (_priceSeries.Points.Count > 100)
+    {
+        _priceSeries.Points.RemoveAt(0);
+        _candleSeries.Items.RemoveAt(0);
+    }
+
+    // Redesenha o gráfico
+    plotView.InvalidatePlot(true);
+}
+
+private Quote GetLatestQuote(string symbol)
+{
+    var url = $"{YahooFinanceApiUrl}{symbol}?interval=1m&range=1d";
+    var request = WebRequest.Create(url);
+    var response = request.GetResponse();
+    var stream = response.GetResponseStream();
+    var reader = new StreamReader(stream);
+    var json = reader.ReadToEnd();
+    var data = JsonConvert.DeserializeObject<YahooFinanceApiResponse>(json);
+    var quote = data.Chart.Result[0].Indicators.Quote[0];
+    return new Quote
+    {
+        Time = DateTimeOffset.FromUnixTimeSeconds(data.Chart.Result[0].Timestamp[0]).DateTime,
+        Price = quote.Close[quote.Close.Count - 1],
+        Open = quote.Open[quote.Open.Count - 1],
+        High = quote.High[quote.High.Count - 1],
+        Low = quote.Low[quote.Low.Count - 1]
+    };
+}
+
+private void btnStop_Click(object sender, EventArgs e)
+{
+    // Para o loop de negociação
+    _isRunning = false;
+}
+
+private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+{
+    // Para o loop de negociação ao fechar o formulário
+    _isRunning = false;
+}
+
+private void txtPositionSize_TextChanged(object sender, EventArgs e)
+{
+    // Recalcula o valor do stop loss e do take profit ao alterar o tamanho da posição
+    if (double.TryParse(txtPositionSize.Text, out var positionSize))
+    {
+        var riskAmount = positionSize * _stopLoss;
+        var rewardAmount = positionSize * _takeProfit;
+        var stopLossPrice = _lastPrice - riskAmount;
+        var takeProfitPrice = _lastPrice + rewardAmount;
+        txtStopLoss.Text = stopLossPrice.ToString("F5");
+        txtTakeProfit.Text = takeProfitPrice.ToString("F5");
+    }
+}
+
+private void txtStopLoss_TextChanged(object sender, EventArgs e)
+{
+    // Recalcula o tamanho da posição ao alterar o valor do stop loss
+    if (double.TryParse(txtStopLoss.Text, out var stopLoss))
+    {
+        var riskAmount = _positionSize * stopLoss;
+        var positionSize = _accountBalance * _riskPerTrade / riskAmount;
+        txtPositionSize.Text = positionSize.ToString("F2");
+    }
+}
+
+private void txtTakeProfit_TextChanged(object sender, EventArgs e)
+{
+    // Recalcula o tamanho da posição ao alterar o valor do take profit
+    if (double.TryParse(txtTakeProfit.Text, out var takeProfit))
+    {
+        var rewardAmount = _positionSize * takeProfit;
+        var positionSize = _accountBalance * _riskPerTrade / rewardAmount;
+        txtPositionSize.Text = positionSize.ToString("F2");
+    }
+}
+
